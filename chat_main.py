@@ -19,19 +19,55 @@ if 'uploader_key_suffix' not in st.session_state:
 from cerebras_client import CerebrasClient, DEFAULT_MODEL as DEFAULT_CEREBRAS_MODEL
 from gemini_client import configure_gemini_api, get_available_models as get_gemini_models
 
-# --- Caching System Prompt ---
-# @st.cache_data # Removed caching for system prompt to ensure fresh load
-def load_system_prompt():
-    SYSTEM_PROMPT_FILE = "system_prompt.txt"
+# --- System Prompts Management ---
+def load_system_prompts():
+    SYSTEM_PROMPTS_FILE = "system_prompts.json"
     DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant. Be concise."
+    
     try:
-        with open(SYSTEM_PROMPT_FILE, "r") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        # Create the file with default content if it doesn't exist
-        with open(SYSTEM_PROMPT_FILE, "w") as f:
-            f.write(DEFAULT_SYSTEM_PROMPT)
-        return DEFAULT_SYSTEM_PROMPT
+        with open(SYSTEM_PROMPTS_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Create the file with default content if it doesn't exist or is invalid
+        default_data = {
+            "prompts": [
+                {
+                    "name": "Default Assistant",
+                    "content": DEFAULT_SYSTEM_PROMPT
+                }
+            ],
+            "selected": "Default Assistant"
+        }
+        with open(SYSTEM_PROMPTS_FILE, "w") as f:
+            json.dump(default_data, f, indent=2)
+        return default_data
+
+def save_system_prompts(prompts_data):
+    SYSTEM_PROMPTS_FILE = "system_prompts.json"
+    try:
+        with open(SYSTEM_PROMPTS_FILE, "w") as f:
+            json.dump(prompts_data, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Error saving prompts: {e}")
+        return False
+
+# Legacy function for backward compatibility
+def load_system_prompt():
+    system_prompts = load_system_prompts()
+    selected = system_prompts.get("selected")
+    
+    # Find the selected prompt
+    for prompt in system_prompts.get("prompts", []):
+        if prompt.get("name") == selected:
+            return prompt.get("content")
+    
+    # Fallback to first prompt if selected not found
+    if system_prompts.get("prompts"):
+        return system_prompts["prompts"][0]["content"]
+    
+    # Ultimate fallback
+    return "You are a helpful AI assistant. Be concise."
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -166,26 +202,132 @@ with st.sidebar:
             help="Lower values (e.g., 0.2) are more deterministic; higher values (e.g., 0.8) are more random."
         )
 
-    # System Prompt Editor
-    st.subheader("📝 System Prompt")
-    # Ensure system_prompt is in session_state before text_area tries to access it
-    if 'system_prompt' not in st.session_state:
-        st.session_state.system_prompt = load_system_prompt()
-
-    st.session_state.system_prompt = st.text_area(
-        "System Instructions",
-        value=st.session_state.system_prompt, # Use session state value
-        height=150,
-        placeholder="Example: 'You are a concise, detail-oriented AI assistant.'",
-        key="system_editor"
-    )
-    if st.button("💾 Save Prompt", key="save_prompt_button"):
-        try:
-            with open("system_prompt.txt", "w") as f:
-                f.write(st.session_state.system_prompt)
-            st.toast("✅ System prompt saved!")
-        except Exception as e:
-            st.error(f"Error saving prompt: {e}")
+    # System Prompt Management
+    st.subheader("📝 System Prompts")
+    
+    # Load system prompts
+    system_prompts_data = load_system_prompts()
+    prompts_list = system_prompts_data.get("prompts", [])
+    selected_prompt = system_prompts_data.get("selected")
+    
+    # Get prompt names for selection
+    prompt_names = [prompt["name"] for prompt in prompts_list]
+    
+    # Select prompt
+    if prompt_names:
+        selected_index = 0
+        if selected_prompt in prompt_names:
+            selected_index = prompt_names.index(selected_prompt)
+        
+        selected_name = st.selectbox(
+            "Select System Prompt",
+            options=prompt_names,
+            index=selected_index,
+            key="system_prompt_selector"
+        )
+        
+        # Update selected prompt in session state and data
+        system_prompts_data["selected"] = selected_name
+        
+        # Find the content of selected prompt
+        selected_content = ""
+        for prompt in prompts_list:
+            if prompt["name"] == selected_name:
+                selected_content = prompt["content"]
+                break
+        
+        # Set system prompt in session state
+        if 'system_prompt' not in st.session_state:
+            st.session_state.system_prompt = selected_content
+        elif selected_name != st.session_state.get("last_selected_prompt"):
+            st.session_state.system_prompt = selected_content
+        
+        # Remember last selected prompt
+        st.session_state.last_selected_prompt = selected_name
+        
+        # Display and edit the selected prompt
+        new_content = st.text_area(
+            "Edit System Instructions",
+            value=st.session_state.system_prompt,
+            height=150,
+            placeholder="Example: 'You are a concise, detail-oriented AI assistant.'",
+            key="system_editor"
+        )
+        
+        # Update session state with edited content
+        st.session_state.system_prompt = new_content
+        
+        # Save button for the current prompt
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Update Prompt", key="update_prompt_button"):
+                # Update the prompt content
+                for prompt in prompts_list:
+                    if prompt["name"] == selected_name:
+                        prompt["content"] = new_content
+                        break
+                
+                # Save changes
+                if save_system_prompts(system_prompts_data):
+                    st.toast(f"✅ System prompt '{selected_name}' updated!")
+        
+        with col2:
+            if st.button("❌ Delete Prompt", key="delete_prompt_button", 
+                        disabled=len(prompts_list) <= 1):  # Prevent deleting the last prompt
+                # Remove the prompt
+                prompts_list = [p for p in prompts_list if p["name"] != selected_name]
+                system_prompts_data["prompts"] = prompts_list
+                
+                # Update selected to first available prompt if deleted the selected one
+                if selected_name == selected_prompt and prompts_list:
+                    system_prompts_data["selected"] = prompts_list[0]["name"]
+                
+                # Save changes
+                if save_system_prompts(system_prompts_data):
+                    st.toast(f"✅ System prompt '{selected_name}' deleted!")
+                    st.rerun()
+    
+    # New prompt section
+    # Use an expander instead of checkbox and subheader
+    
+    # Initialize form key suffix if it doesn't exist (for generating new keys)
+    if "form_key_suffix" not in st.session_state:
+        st.session_state.form_key_suffix = 0
+        
+    # Generate current keys for form elements
+    name_key = f"new_prompt_name_{st.session_state.form_key_suffix}"
+    content_key = f"new_prompt_content_{st.session_state.form_key_suffix}"
+    
+    # Always set expanded=False to keep it closed by default
+    with st.expander("➕ Add New Prompt", expanded=False):
+        new_prompt_name = st.text_input("New Prompt Name", key=name_key)
+        new_prompt_content = st.text_area(
+            "New Prompt Content", 
+            height=100,
+            placeholder="Enter instructions for the AI here...",
+            key=content_key
+        )
+        
+        # Regular button, no form
+        if st.button("➕ Add Prompt", key="add_prompt_button", 
+                    disabled=not new_prompt_name or not new_prompt_content):
+            # Check if name already exists
+            if new_prompt_name in prompt_names:
+                st.error(f"A prompt with name '{new_prompt_name}' already exists.")
+            else:
+                # Add new prompt
+                prompts_list.append({
+                    "name": new_prompt_name,
+                    "content": new_prompt_content
+                })
+                system_prompts_data["prompts"] = prompts_list
+                
+                # Save changes
+                if save_system_prompts(system_prompts_data):
+                    # Increment the form key suffix to get new empty fields on next render
+                    st.session_state.form_key_suffix += 1
+                    st.toast(f"✅ New system prompt '{new_prompt_name}' added!")
+                    st.rerun()
 
     # Chat Actions
     st.subheader("🗑️ Actions")
@@ -515,135 +657,52 @@ st.markdown(
         white-space: pre-wrap !important;
     }
 
+    /* Basic styling for expanders - simplified and fixed */
     .stExpander {
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 8px !important;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
         margin-top: 5px;
-        margin-bottom: 5px;
+        margin-bottom: 10px;
     }
     html[data-theme="dark"] .stExpander {
-        border: 1px solid #333333 !important;
+        border: 1px solid #3d3d3d;
     }
 
-    .stExpander header {
-        background-color: #f9f9f9 !important;
-        padding: 8px 12px !important;
-        border-radius: 7px 7px 0 0 !important;
+    /* Input styling - simplified */
+    input[type="text"], textarea {
+        border-radius: 6px;
+        border: 1px solid #ced4da;
     }
-    html[data-theme="dark"] .stExpander header {
-        background-color: #2c2c2c !important;
-        color: #e0e0e0 !important;
+    html[data-theme="dark"] input[type="text"], 
+    html[data-theme="dark"] textarea {
+        border: 1px solid #4d5154;
     }
-
-    .stExpander [data-testid="stExpanderDetails"] {
-        background-color: #ffffff !important;
-        padding: 10px !important;
-        border-radius: 0 0 7px 7px !important;
+    
+    /* Button styling - simplified */
+    .stButton button {
+        border-radius: 6px;
+        font-weight: 500;
+        transition: all 0.15s ease-in-out;
     }
-    html[data-theme="dark"] .stExpander [data-testid="stExpanderDetails"] {
-        background-color: #1e1e1e !important;
-        color: #d1d1d1 !important;
+    
+    /* Primary buttons (Add, Update) */
+    .stButton button {
+        background-color: #4e7496;
+        color: white;
     }
-
-    .stExpander [data-testid="stCaptionContainer"] {
-        font-style: italic;
-        color: #555;
-        background-color: #f0f8ff;
-        padding: 8px;
-        border-radius: 4px;
-    }
-    html[data-theme="dark"] .stExpander [data-testid="stCaptionContainer"] {
-        color: #aaa;
-        background-color: #2a3950;
-    }
-
-    /* Sidebar styling based on app theme */
-    [data-testid="stSidebar"] {
-        transition: background-color 0.3s ease, border-color 0.3s ease;
-    }
-
-    /* Light mode styling for sidebar */
-    html[data-theme="light"] [data-testid="stSidebar"] {
-        background-color: #ffffff !important; /* Light mode background */
-        border-right: 1px solid #dee2e6 !important; /* Light mode border */
-    }
-
-    html[data-theme="light"] [data-testid="stSidebar"] .stSlider label,
-    html[data-theme="light"] [data-testid="stSidebar"] .stSelectbox label,
-    html[data-theme="light"] [data-testid="stSidebar"] .stTextInput label,
-    html[data-theme="light"] [data-testid="stSidebar"] .stTextArea label {
-        color: #333333 !important; /* Dark text for light mode */
-    }
-
-    /* Dark mode styling for sidebar */
-    html[data-theme="dark"] [data-testid="stSidebar"] {
-        background-color: #0E1117 !important; /* Streamlit's default dark sidebar */
-        border-right: 1px solid #262730 !important; /* Streamlit's default dark border */
-    }
-
-    html[data-theme="dark"] [data-testid="stSidebar"] .stSlider label,
-    html[data-theme="dark"] [data-testid="stSidebar"] .stSelectbox label,
-    html[data-theme="dark"] [data-testid="stSidebar"] .stTextInput label,
-    html[data-theme="dark"] [data-testid="stSidebar"] .stTextArea label {
-        color: #fafafa !important; /* Light text for dark mode (Streamlit's default) */
-    }
-
-    /* Button styling for both modes */
-    .stButton>button {
-        border-radius: 8px !important;
-        transition: all 0.2s ease-in-out;
-        border: 1px solid transparent;
-    }
-
-    .stButton>button:hover {
+    .stButton button:hover:enabled {
+        background-color: #3a5a78;
         transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    html[data-theme="dark"] .stButton>button:hover {
-        box-shadow: 0 2px 4px rgba(255,255,255,0.1); /* Lighter shadow for dark mode */
+    
+    /* Danger button (Delete) */
+    button[kind="error"], button[data-testid="baseButton-secondary"] {
+        background-color: #6c757d;
     }
-
-    /* Primary button */
-    .stButton[kind="primary"]>button, .stButton>button[kind="primary"] {
-        background-color: #007bff !important;
-        color: white !important;
-        border-color: #007bff !important;
-    }
-    .stButton[kind="primary"]>button:hover, .stButton>button[kind="primary"]:hover {
-        background-color: #0056b3 !important;
-        border-color: #0056b3 !important;
-    }
-    html[data-theme="dark"] .stButton[kind="primary"]>button, 
-    html[data-theme="dark"] .stButton>button[kind="primary"] {
-        background-color: #007bff !important; /* Keep primary color consistent or adjust for dark */
-        border-color: #007bff !important;
-    }
-    html[data-theme="dark"] .stButton[kind="primary"]>button:hover, 
-    html[data-theme="dark"] .stButton>button[kind="primary"]:hover {
-        background-color: #0056b3 !important;
-        border-color: #0056b3 !important;
-    }
-
-
-    /* Secondary button (like clear history) */
-    .stButton[kind="secondary"]>button, .stButton>button[kind="secondary"] {
-        background-color: #6c757d !important;
-        color: white !important;
-        border-color: #6c757d !important;
-    }
-    .stButton[kind="secondary"]>button:hover, .stButton>button[kind="secondary"]:hover {
-        background-color: #545b62 !important;
-        border-color: #545b62 !important;
-    }
-    html[data-theme="dark"] .stButton[kind="secondary"]>button,
-    html[data-theme="dark"] .stButton>button[kind="secondary"] {
-        background-color: #495057 !important; /* Darker secondary for dark mode */
-        border-color: #495057 !important;
-    }
-    html[data-theme="dark"] .stButton[kind="secondary"]>button:hover,
-    html[data-theme="dark"] .stButton>button[kind="secondary"]:hover {
-        background-color: #3e444a !important;
-        border-color: #3e444a !important;
+    
+    /* Fix layout spacing */
+    .stExpander [data-testid="stExpanderDetails"] {
+        padding: 10px;
     }
 
     </style>
