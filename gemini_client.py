@@ -13,7 +13,6 @@ def configure_gemini_api(st_object_for_error_display):
         api_key = None
         if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st_object_for_error_display.success("Using GEMINI_API_KEY from Streamlit secrets.")
         
         # Fall back to environment variables if not in secrets
         if not api_key:
