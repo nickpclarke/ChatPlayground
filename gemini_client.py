@@ -7,12 +7,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def configure_gemini_api(st_object_for_error_display):
-    """Configures the Gemini API using the API key from environment variables."""
+    """Configures the Gemini API using the API key from Streamlit secrets or environment variables."""
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
+        # Try to get API key from Streamlit secrets first
+        api_key = None
+        if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st_object_for_error_display.success("Using GEMINI_API_KEY from Streamlit secrets.")
+        
+        # Fall back to environment variables if not in secrets
         if not api_key:
-            st_object_for_error_display.error("GEMINI_API_KEY not found in environment variables. Please set it up.")
+            api_key = os.getenv("GEMINI_API_KEY")
+            
+        if not api_key:
+            st_object_for_error_display.error("GEMINI_API_KEY not found in Streamlit secrets or environment variables. Please set it up.")
             return False
+            
         genai.configure(api_key=api_key)
         return True
     except Exception as e:
