@@ -5,6 +5,16 @@ import json
 from io import StringIO
 import google.generativeai as genai
 
+# Initialize session state for dynamic uploader key suffix
+if 'uploader_key_suffix' not in st.session_state:
+    st.session_state.uploader_key_suffix = 0
+
+# --- Flag for clearing file uploader (This whole block can be removed now) ---
+# if st.session_state.get("clear_upload_chat_button_flag", False):
+#     if "upload_chat_button" in st.session_state: 
+#         st.session_state.upload_chat_button = None
+#     st.session_state.clear_upload_chat_button_flag = False
+
 # --- IMMEDIATE API KEY CHECK ---
 from cerebras_client import CerebrasClient, DEFAULT_MODEL as DEFAULT_CEREBRAS_MODEL
 from gemini_client import configure_gemini_api, get_available_models as get_gemini_models
@@ -186,7 +196,13 @@ with st.sidebar:
 
     # Load/Download Chat
     st.subheader("📁 File Actions")
-    uploaded_file = st.file_uploader("Upload Chat History (JSON)", type=["json"], key="upload_chat_button")
+    # Use a dynamic key for the file uploader
+    uploader_instance_key = f"upload_chat_button_{st.session_state.uploader_key_suffix}"
+    uploaded_file = st.file_uploader(
+        "Upload Chat History (JSON)", 
+        type=["json"], 
+        key=uploader_instance_key
+    )
     if uploaded_file:
         try:
             uploaded_content = uploaded_file.read().decode('utf-8') # Explicitly specify utf-8
@@ -209,9 +225,9 @@ with st.sidebar:
                 if valid_format:
                     st.session_state.messages = parsed_json
                     st.toast("✅ Chat history loaded!")
-                    # Clear the file uploader state to prevent re-processing on rerun
-                    if "upload_chat_button" in st.session_state:
-                        st.session_state.upload_chat_button = None # Set the widget's value to None
+                    # Increment the key suffix to reset the uploader on the next run
+                    st.session_state.uploader_key_suffix += 1
+                    # st.session_state.clear_upload_chat_button_flag = True # Old flag logic, remove
                     st.rerun()
                 else:
                     st.error("Invalid JSON format. Expected a list of objects, each with a string 'role' and string 'content'. E.g., [{\"role\": \"user\", \"content\": \"Hi\"}, ...]")
