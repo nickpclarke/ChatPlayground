@@ -253,7 +253,9 @@ if "messages" not in st.session_state:
 for i, msg in enumerate(st.session_state.messages):
     avatar_icon = "👤" if msg["role"] == "user" else "🤖"
     with st.chat_message(msg["role"], avatar=avatar_icon):
-        st.markdown(msg["content"])
+        # Assistant messages might contain HTML for anchor and link if they were long.
+        # User messages do not. unsafe_allow_html is safe for both.
+        st.markdown(msg["content"], unsafe_allow_html=True)
     # Add a divider only if it's not the last message AND there are more messages after it.
     # This prevents a divider after the very last message.
     if i < len(st.session_state.messages) - 1 : 
@@ -308,19 +310,32 @@ if prompt := st.chat_input("Send a message..."):
                         after_think = raw_response[think_match.end(0):]
                         display_text = (before_think + after_think).strip()
                     
-                    # Enhanced Error Handling for Large Responses (Point 9)
-                    if len(display_text) > 20000: # Increased limit significantly
-                        st.warning("Response is very long and might be slow to render fully.")
-                        # Not truncating by default to preserve information, but warning is good.
-                        # Consider truncation if performance becomes an issue:
-                        # display_text = display_text[:15000] + "... (truncated for brevity)"
+                    # --- Add anchor and "Back to top" link for long assistant messages ---
+                    LONG_MESSAGE_THRESHOLD = 750 # Characters
+                    # The index of the new assistant message (after user's prompt and this one are added)
+                    assistant_message_index = len(st.session_state.messages) 
+                    anchor_id = f"msg-anchor-{assistant_message_index}"
+
+                    # Prepare content with anchor at the beginning
+                    # Using a div for the anchor ensures it's a block element and content flows after it.
+                    content_with_anchor_and_link = f"<div id='{anchor_id}'></div>{display_text}"
+
+                    if len(display_text) > LONG_MESSAGE_THRESHOLD:
+                        back_to_top_link_html = (
+                            f"<br><p style='text-align: right; font-size: 0.8em; margin-top: 10px; margin-bottom: 0px;'>"
+                            f"<a href='#{anchor_id}'>⬆️ Back to top of this response</a>"
+                            f"</p>"
+                        )
+                        content_with_anchor_and_link += back_to_top_link_html
+                    # --- End of new logic ---
 
                     if thought_content:
                         with st.expander("🧠 Thought Process"):
                             st.caption(thought_content)
                     
-                    st.markdown(display_text)
-                    st.session_state.messages.append({"role": "assistant", "content": display_text})
+                    st.markdown(content_with_anchor_and_link, unsafe_allow_html=True)
+                    # Save the processed content (with HTML) to history
+                    st.session_state.messages.append({"role": "assistant", "content": content_with_anchor_and_link})
 
                 except Exception as e:
                     st.error(f"An error occurred with the Cerebras API: {e}")
