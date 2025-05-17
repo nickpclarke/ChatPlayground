@@ -158,7 +158,7 @@ with st.sidebar:
 
         # Add Temperature Slider (Point 7)
         st.session_state.temperature = st.slider(
-            "Temperature (Creativity vs. Focus)",
+            "Temperature (Focus vs. Creativity)",
             0.0, 1.5, # Range from API docs
             st.session_state.get("temperature", 0.7), # Default 0.7
             step=0.05,
