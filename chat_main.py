@@ -3,12 +3,14 @@ import os
 import re
 import json
 from io import StringIO
+import google.generativeai as genai
 
 # --- IMMEDIATE API KEY CHECK ---
-from cerebras_client import CerebrasClient, DEFAULT_MODEL
+from cerebras_client import CerebrasClient, DEFAULT_MODEL as DEFAULT_CEREBRAS_MODEL
+from gemini_client import configure_gemini_api, get_available_models as get_gemini_models
 
 # --- Caching System Prompt ---
-@st.cache_data
+# @st.cache_data # Removed caching for system prompt to ensure fresh load
 def load_system_prompt():
     SYSTEM_PROMPT_FILE = "system_prompt.txt"
     DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant. Be concise."
@@ -27,8 +29,8 @@ st.set_page_config(
     page_icon="🤖",
     layout="centered"
 )
-st.title("🤖 Cerebras Powered Chat")
-st.write("A sleek, fast, and user-friendly chat UI using Cerebras.") # Genericized model name
+st.title("🤖 Unified Model Chat")
+st.write("A sleek, fast, and user-friendly chat UI using Cerebras and Gemini models.") # Genericized model name
 
 # --- Model Options and Descriptions ---
 # DEFAULT_MODEL is imported from cerebras_client
@@ -38,17 +40,42 @@ CEREBRAS_MODEL_OPTIONS = [
     "llama3.1-8b",
     "llama-3.3-70b"
 ]
-MODEL_DESCRIPTIONS = {
-    "qwen-3-32b": "Fast inference, great for rapid iteration.",
-    "llama-4-scout-17b-16e-instruct": "Optimized for guided workflows.",
-    "llama3.1-8b": "Light and fast for quick tasks.",
-    "llama-3.3-70b": "Most capable for complex reasoning."
+CEREBRAS_MODEL_DESCRIPTIONS = {
+    "qwen-3-32b": "Cerebras: Fast inference, great for rapid iteration.",
+    "llama-4-scout-17b-16e-instruct": "Cerebras: Optimized for guided workflows.",
+    "llama3.1-8b": "Cerebras: Light and fast for quick tasks.",
+    "llama-3.3-70b": "Cerebras: Most capable for complex reasoning."
 }
+
+# Configure Gemini API early
+gemini_api_configured = configure_gemini_api(st)
+
+# Fetch Gemini Models
+GEMINI_MODEL_OPTIONS = []
+if gemini_api_configured:
+    GEMINI_MODEL_OPTIONS = get_gemini_models(st)
+
+# Combine Model Lists
+ALL_AVAILABLE_MODELS = CEREBRAS_MODEL_OPTIONS + GEMINI_MODEL_OPTIONS
+MODEL_DESCRIPTIONS = {**CEREBRAS_MODEL_DESCRIPTIONS}
+for gem_model in GEMINI_MODEL_OPTIONS:
+    if gem_model not in MODEL_DESCRIPTIONS: # Avoid overwriting if a Gemini model happens to have the same name
+        MODEL_DESCRIPTIONS[gem_model] = "Gemini: General purpose model."
+
+# Determine a sensible overall default model
+# Prioritize Cerebras default, then first Cerebras, then first Gemini, then None
+DEFAULT_MODEL = DEFAULT_CEREBRAS_MODEL
+if DEFAULT_MODEL not in ALL_AVAILABLE_MODELS:
+    if CEREBRAS_MODEL_OPTIONS:
+        DEFAULT_MODEL = CEREBRAS_MODEL_OPTIONS[0]
+    elif GEMINI_MODEL_OPTIONS:
+        DEFAULT_MODEL = GEMINI_MODEL_OPTIONS[0]
+    else:
+        DEFAULT_MODEL = None # No models available
+
 # Ensure DEFAULT_MODEL is in options, if not, add it or pick a sensible default
-if DEFAULT_MODEL not in CEREBRAS_MODEL_OPTIONS and CEREBRAS_MODEL_OPTIONS:
-    # If DEFAULT_MODEL from SDK is valid but not in our hardcoded list,
-    # we could add it, but for now, we prioritize the curated list.
-    # If it's truly unavailable, the selection logic below will handle it.
+if DEFAULT_MODEL is not None and DEFAULT_MODEL not in ALL_AVAILABLE_MODELS and ALL_AVAILABLE_MODELS:
+    # This case should ideally not be hit if DEFAULT_MODEL logic above is correct
     pass
 
 # --- Session State Initialization for new settings ---
@@ -60,7 +87,6 @@ if "temperature" not in st.session_state:
 # Dynamically update MAX_MESSAGES based on session state
 MAX_MESSAGES = st.session_state.get("max_history", 50)
 
-
 # --- Sidebar Configuration ---
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -70,30 +96,30 @@ with st.sidebar:
     # Model Selection
     # Refactored model selection logic (Point 8)
     current_model_in_session = st.session_state.get("model", DEFAULT_MODEL)
-    if current_model_in_session not in CEREBRAS_MODEL_OPTIONS:
+    if current_model_in_session not in ALL_AVAILABLE_MODELS:
         st.warning(f"Previously selected model '{current_model_in_session}' is no longer available. Reverting to default.")
         current_model_in_session = DEFAULT_MODEL
-        if DEFAULT_MODEL not in CEREBRAS_MODEL_OPTIONS and CEREBRAS_MODEL_OPTIONS: # If default also not in list
-            current_model_in_session = CEREBRAS_MODEL_OPTIONS[0]
+        if DEFAULT_MODEL not in ALL_AVAILABLE_MODELS and ALL_AVAILABLE_MODELS: # If default also not in list
+            current_model_in_session = ALL_AVAILABLE_MODELS[0]
         st.session_state.model = current_model_in_session
     
     # Determine default index robustly
     default_model_index = 0
-    if CEREBRAS_MODEL_OPTIONS: # Ensure list is not empty
+    if ALL_AVAILABLE_MODELS: # Ensure list is not empty
         try:
-            default_model_index = CEREBRAS_MODEL_OPTIONS.index(current_model_in_session)
+            default_model_index = ALL_AVAILABLE_MODELS.index(current_model_in_session)
         except ValueError:
             default_model_index = 0 # Fallback to first model if current_model_in_session is somehow still not in the list
 
     if "model" not in st.session_state: # Initialize if not set
-        st.session_state.model = CEREBRAS_MODEL_OPTIONS[default_model_index] if CEREBRAS_MODEL_OPTIONS else None
+        st.session_state.model = ALL_AVAILABLE_MODELS[default_model_index] if ALL_AVAILABLE_MODELS else None
 
-    if CEREBRAS_MODEL_OPTIONS:
+    if ALL_AVAILABLE_MODELS:
         st.session_state.model = st.selectbox(
             "Model to Use",
-            options=CEREBRAS_MODEL_OPTIONS,
+            options=ALL_AVAILABLE_MODELS,
             index=default_model_index,
-            key="cerebras_model_selector",
+            key="unified_model_selector",
             help="Choose a model. Hover over options for details if descriptions are long."
         )
         # Model Descriptions with Tooltips (Point 2) - simplified display
@@ -102,7 +128,6 @@ with st.sidebar:
     else:
         st.error("No chat models available for selection.")
         st.stop()
-
 
     # Advanced Toggle
     if st.toggle("🔧 Advanced Settings", key="advanced_settings_toggle"):
@@ -152,7 +177,6 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Error saving prompt: {e}")
 
-
     # Chat Actions
     st.subheader("🗑️ Actions")
     if st.button("❌ Clear Chat History", key="clear_chat_button"):
@@ -198,7 +222,6 @@ with st.sidebar:
         except Exception as e:
             st.error(f"An unexpected error occurred while loading chat: {e}")
 
-
     if "messages" in st.session_state and st.session_state.messages:
         try:
             chat_export_data = json.dumps(st.session_state.messages, indent=2)
@@ -213,34 +236,41 @@ with st.sidebar:
             st.error(f"Error preparing download: {e}")
             st.stop()
 
-
 # --- Cerebras Client Setup (Cached) ---
 @st.cache_resource
 def get_client():
     # Try to get API key from st.secrets first, then environment variable
-    api_key = None
+    # CEREBRAS API KEY Handling
+    cerebras_api_key = None
     if hasattr(st, 'secrets') and "CEREBRAS_API_KEY" in st.secrets:
-        api_key = st.secrets["CEREBRAS_API_KEY"]
-    if not api_key:
-        api_key = os.getenv("CEREBRAS_API_KEY")
+        cerebras_api_key = st.secrets["CEREBRAS_API_KEY"]
+    if not cerebras_api_key:
+        cerebras_api_key = os.getenv("CEREBRAS_API_KEY")
 
-    if not api_key:
-        st.error("CEREBRAS_API_KEY not found. Please set it in .streamlit/secrets.toml or as an environment variable.")
-        st.info("If you've just set it, please restart your terminal/IDE and Streamlit.")
-        st.stop()
-    
-    try:
-        client = CerebrasClient(api_key=api_key)
-        return client
-    except ValueError as ve: # Specific error from CerebrasClient if key is None (should be caught above)
-        st.error(f"Cerebras Client Error: {ve}")
-        st.stop()
-    except Exception as e:
-        st.error(f"Failed to initialize Cerebras SDK: {e}")
-        st.info("This might be due to an invalid API key, network issues, or Cerebras service status.")
-        st.stop()
+    # GEMINI API KEY is handled by gemini_client.py using os.getenv("GEMINI_API_KEY")
+    # We've already called configure_gemini_api() which uses st.error for feedback.
 
-client = get_client() # Initialize client, will stop app if fails
+    # Initialize Cerebras client if key is present
+    cerebras_client_instance = None
+    if cerebras_api_key:
+        try:
+            cerebras_client_instance = CerebrasClient(api_key=cerebras_api_key)
+        except ValueError as ve:
+            st.warning(f"Cerebras Client Error: {ve}. Cerebras models may not be available.")
+        except Exception as e:
+            st.warning(f"Failed to initialize Cerebras SDK: {e}. Cerebras models may not be available.")
+    else:
+        st.info("CEREBRAS_API_KEY not found or not set. Cerebras models will not be available. Set it in .streamlit/secrets.toml or as an environment variable if you wish to use them.")
+        # If only Cerebras models were listed and no key, this is a bigger issue.
+        # But now we have Gemini as a potential fallback.
+
+    # The get_client function now needs to potentially return multiple clients or a dispatcher
+    # For now, we'll handle client selection in the chat generation logic.
+    # This function's role is more about ensuring API keys are checked and base clients are attempted.
+    # The actual Gemini model object is initialized later, on demand.
+    return {"cerebras": cerebras_client_instance} # Return a dict of clients
+
+client_connections = get_client() # Initialize client connections
 
 # --- Model Descriptions (Optional, can be used later e.g. in tooltips) ---
 # Moved MODEL_DESCRIPTIONS near CEREBRAS_MODEL_OPTIONS for clarity
@@ -261,7 +291,6 @@ for i, msg in enumerate(st.session_state.messages):
     if i < len(st.session_state.messages) - 1 : 
         st.markdown("---")
 
-
 # --- Chat Input Handler ---
 if prompt := st.chat_input("Send a message..."):
     # Handle Empty User Prompts (Point 4)
@@ -275,7 +304,7 @@ if prompt := st.chat_input("Send a message..."):
 
         # Generate with error boundary
         with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("Cerebras is thinking..."):
+            with st.spinner("The AI is thinking..."):
                 try:
                     # Prepare message list
                     messages_for_api = []
@@ -283,11 +312,15 @@ if prompt := st.chat_input("Send a message..."):
                     if current_system_prompt:
                         messages_for_api.append({"role": "system", "content": current_system_prompt})
                     
-                    messages_for_api.extend(st.session_state.messages)
+                    # Ensure user messages are included; system prompt handled above
+                    # Filter out any existing system messages from st.session_state.messages to avoid duplication
+                    history_for_api = [msg for msg in st.session_state.messages if msg["role"] != "system"]
+                    messages_for_api.extend(history_for_api)
                     
+                    selected_model_name = st.session_state.model
                     api_params = {
                         "messages": messages_for_api,
-                        "model": st.session_state.model
+                        "model": selected_model_name # This is just the name, client logic will use it
                     }
                     if "max_completion_tokens" in st.session_state and st.session_state.get("advanced_settings_toggle", False):
                         api_params["max_completion_tokens"] = st.session_state.max_completion_tokens
@@ -296,12 +329,80 @@ if prompt := st.chat_input("Send a message..."):
                     if st.session_state.get("advanced_settings_toggle", False):
                         api_params["temperature"] = st.session_state.temperature
                     
-                    client_response = client.get_chat_completion(**api_params)
-                    raw_response = client_response.choices[0].message.content
-                    
-                    thought_content = None
-                    display_text = raw_response
+                    raw_response = ""
+                    thought_content = None # Initialize thought_content
 
+                    # --- Client Dispatch Logic ---
+                    if selected_model_name in CEREBRAS_MODEL_OPTIONS:
+                        if client_connections["cerebras"]:
+                            st.toast(f"Calling Cerebras model: {selected_model_name}...", icon="🧠") # Debug Toast
+                            # Cerebras specific params might need adjustment if different from Gemini
+                            cerebras_api_params = {
+                                "messages": api_params["messages"], # Pass the combined history + system
+                                "model": selected_model_name
+                            }
+                            if "max_completion_tokens" in api_params:
+                                cerebras_api_params["max_tokens"] = api_params["max_completion_tokens"] # Cerebras uses max_tokens
+                            if "temperature" in api_params:
+                                cerebras_api_params["temperature"] = api_params["temperature"]
+                            
+                            client_response = client_connections["cerebras"].get_chat_completion(**cerebras_api_params)
+                            raw_response = client_response.choices[0].message.content
+                            st.toast(f"Response received from Cerebras: {selected_model_name}", icon="✅") # Debug Toast
+                        else:
+                            st.error(f"Cerebras client not available for model {selected_model_name}. Check API key.")
+                            st.stop()
+                    elif selected_model_name in GEMINI_MODEL_OPTIONS:
+                        if gemini_api_configured: # Check if Gemini API was set up
+                            st.toast(f"Calling Gemini model: {selected_model_name}...", icon="✨") # Debug Toast
+                            from gemini_client import initialize_model # import only when needed
+                            
+                            # system_instruction_text will be extracted from messages_for_api
+                            system_instruction_text_for_gemini = None
+                            temp_messages_for_gemini = []
+                            
+                            # Convert messages to Gemini format [{role: "user"/"model", parts: [text]}]
+                            # And extract system prompt
+                            gemini_formatted_messages = []
+                            for msg_idx, msg in enumerate(messages_for_api):
+                                role = "model" if msg["role"] == "assistant" else msg["role"]
+                                if role == "system" and msg_idx == 0: # System prompt should be first
+                                    system_instruction_text_for_gemini = msg["content"]
+                                    # Do not add system prompt to gemini_formatted_messages, it's passed to initialize_model
+                                else:
+                                    gemini_formatted_messages.append({"role": role, "parts": [msg["content"]]})
+                            
+                            gemini_model_instance = initialize_model(
+                                selected_model_name, 
+                                st, 
+                                system_instruction=system_instruction_text_for_gemini
+                            )
+
+                            if gemini_model_instance:
+                                gemini_generation_config = {}
+                                if "max_completion_tokens" in api_params:
+                                     gemini_generation_config["max_output_tokens"] = api_params["max_completion_tokens"]
+                                if "temperature" in api_params:
+                                     gemini_generation_config["temperature"] = api_params["temperature"]
+
+                                response = gemini_model_instance.generate_content(
+                                    contents=gemini_formatted_messages, # History without system prompt
+                                    generation_config=genai.types.GenerationConfig(**gemini_generation_config) if gemini_generation_config else None,
+                                )
+                                raw_response = response.text
+                                st.toast(f"Response received from Gemini: {selected_model_name}", icon="✅") # Debug Toast
+                            else:
+                                st.error(f"Failed to initialize Gemini model {selected_model_name} with system prompt '{system_instruction_text_for_gemini}'.")
+                                st.stop()
+                        else:
+                            st.error("Gemini API not configured. Please set GEMINI_API_KEY.")
+                            st.stop()
+                    else:
+                        st.error(f"Unknown model type for {selected_model_name}. Cannot proceed.")
+                        st.stop()
+                    # --- End Client Dispatch ---
+
+                    display_text = raw_response
                     think_match = re.search(r'< *think *>(.*?)< */ *think *>', raw_response, re.DOTALL | re.IGNORECASE)
                     
                     if think_match:
