@@ -1,0 +1,2 @@
+streamlit
+cerebras-cloud-sdk 
