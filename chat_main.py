@@ -71,7 +71,7 @@ def load_system_prompt():
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="🧠 Cerebras Chat",
+    page_title="🧠 Unified Chat",
     page_icon="🤖",
     layout="centered"
 )
