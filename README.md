@@ -212,3 +212,31 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 **Main Dependencies:**
 - `streamlit`
+
+## 🌐 **Streamlit Community Edition Deployment**
+
+This app is configured for easy deployment on Streamlit Community Edition.
+
+### **Deployment Files:**
+- **`requirements.txt`**: Contains all necessary dependencies for cloud deployment
+- **`.streamlit/config.toml`**: Forces Poetry usage and sets app theme
+- **`.streamlit/secrets.toml`**: Add your API keys here for deployment
+
+### **Setting Up Secrets:**
+In your Streamlit Community Edition app settings, add:
+```toml
+CEREBRAS_API_KEY = "your_cerebras_api_key_here"
+GEMINI_API_KEY = "your_gemini_api_key_here"
+```
+
+### **Deployment Notes:**
+- ✅ Both Poetry (`pyproject.toml`) and pip (`requirements.txt`) are supported
+- ✅ Thinking functionality works in the cloud with `google-genai>=1.18.0`
+- ✅ Auto-configured dark theme for better UX
+- ✅ All dependencies are version-pinned for stability
+
+### **Quick Deploy:**
+1. Push to GitHub/GitLab
+2. Connect to Streamlit Community Edition
+3. Add API keys to secrets
+4. Deploy! 🚀

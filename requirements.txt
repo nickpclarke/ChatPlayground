@@ -1,4 +1,5 @@
-streamlit
-cerebras-cloud-sdk 
-google-generativeai
-python-dotenv 
+streamlit>=1.28.0
+cerebras-cloud-sdk
+google-generativeai>=0.3.0
+google-genai>=1.18.0
+python-dotenv>=1.0.0 
