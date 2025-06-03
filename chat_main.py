@@ -106,7 +106,11 @@ ALL_AVAILABLE_MODELS = CEREBRAS_MODEL_OPTIONS + GEMINI_MODEL_OPTIONS
 MODEL_DESCRIPTIONS = {**CEREBRAS_MODEL_DESCRIPTIONS}
 for gem_model in GEMINI_MODEL_OPTIONS:
     if gem_model not in MODEL_DESCRIPTIONS: # Avoid overwriting if a Gemini model happens to have the same name
-        MODEL_DESCRIPTIONS[gem_model] = "Gemini: General purpose model."
+        # Check if this is a thinking-capable model
+        if "2.5" in gem_model or "thinking" in gem_model.lower():
+            MODEL_DESCRIPTIONS[gem_model] = "Gemini: Advanced model with thinking capabilities 🧠"
+        else:
+            MODEL_DESCRIPTIONS[gem_model] = "Gemini: General purpose model."
 
 # Determine a sensible overall default model
 # Prioritize Cerebras default, then first Cerebras, then first Gemini, then None
@@ -161,27 +165,106 @@ with st.sidebar:
         st.session_state.model = ALL_AVAILABLE_MODELS[default_model_index] if ALL_AVAILABLE_MODELS else None
 
     if ALL_AVAILABLE_MODELS:
-        st.session_state.model = st.selectbox(
+        # Separate thinking and non-thinking models for better organization
+        thinking_models = []
+        regular_models = []
+        
+        for model in ALL_AVAILABLE_MODELS:
+            if model in GEMINI_MODEL_OPTIONS and ("2.5" in model or "thinking" in model.lower()):
+                thinking_models.append(model)
+            elif model in CEREBRAS_MODEL_OPTIONS and any(keyword in model.lower() for keyword in ["qwen", "scout"]):
+                thinking_models.append(model)
+            else:
+                regular_models.append(model)
+        
+        # Create organized model list with separators
+        organized_models = []
+        if thinking_models:
+            organized_models.extend(thinking_models)
+            if regular_models:
+                organized_models.append("--- Standard Models ---")
+                organized_models.extend(regular_models)
+        else:
+            organized_models = regular_models
+        
+        # Find current selection index in organized list
+        if st.session_state.model in organized_models:
+            default_model_index = organized_models.index(st.session_state.model)
+        else:
+            default_model_index = 0
+        
+        selected_model = st.selectbox(
             "Model to Use",
-            options=ALL_AVAILABLE_MODELS,
+            options=organized_models,
             index=default_model_index,
             key="unified_model_selector",
-            help="Choose a model. Hover over options for details if descriptions are long."
+            help="🧠 = Thinking-capable models that show reasoning process",
+            format_func=lambda x: f"🧠 {x}" if x in thinking_models else x if x.startswith("---") else f"⚡ {x}"
         )
-        # Model Descriptions with Tooltips (Point 2) - simplified display
+        
+        # Skip separator selection
+        if selected_model.startswith("---"):
+            st.warning("Please select a model, not a separator.")
+            st.stop()
+        
+        st.session_state.model = selected_model
+        
+        # Enhanced model descriptions with performance indicators
         selected_model_desc = MODEL_DESCRIPTIONS.get(st.session_state.model, "No description available.")
-        st.caption(f"**Using**: {st.session_state.model} - {selected_model_desc}")
+        
+        # Add performance and capability indicators
+        is_thinking_capable = selected_model in thinking_models
+        model_type = "Cerebras" if selected_model in CEREBRAS_MODEL_OPTIONS else "Gemini"
+        
+        # Performance indicators
+        performance_indicators = []
+        if "qwen" in selected_model.lower():
+            performance_indicators.extend(["🚀 Fast inference", "🧠 Structured thinking"])
+        elif "scout" in selected_model.lower():
+            performance_indicators.extend(["🎯 Guided workflows", "🧠 Step-by-step reasoning"])
+        elif "2.5" in selected_model and "flash" in selected_model.lower():
+            performance_indicators.extend(["⚡ Ultra-fast", "🧠 Advanced thinking", "💰 Cost-efficient"])
+        elif "2.5" in selected_model and "pro" in selected_model.lower():
+            performance_indicators.extend(["🧠 Deep reasoning", "📊 Complex analysis", "🎯 High accuracy"])
+        elif "flash" in selected_model.lower():
+            performance_indicators.extend(["⚡ Fast responses", "💰 Budget-friendly"])
+        elif "pro" in selected_model.lower():
+            performance_indicators.extend(["🎯 High quality", "📊 Detailed analysis"])
+        
+        # Display enhanced model info
+        st.caption(f"**Using**: {selected_model}")
+        st.caption(f"**Type**: {model_type} | **Thinking**: {'✅ Enabled' if is_thinking_capable else '❌ Not available'}")
+        if performance_indicators:
+            st.caption(f"**Strengths**: {' | '.join(performance_indicators)}")
+        
+        # Show thinking status prominently for thinking models
+        if is_thinking_capable:
+            st.success("🧠 This model will show its reasoning process!")
+        
     else:
         st.error("No chat models available for selection.")
         st.stop()
 
     # Advanced Toggle
     if st.toggle("🔧 Advanced Settings", key="advanced_settings_toggle"):
+        # Determine intelligent default for max completion tokens based on model type
+        current_model = st.session_state.get("model", "")
+        is_thinking_model_selected = (current_model in GEMINI_MODEL_OPTIONS and ("2.5" in current_model or "thinking" in current_model.lower())) or \
+                                   (current_model in CEREBRAS_MODEL_OPTIONS and any(keyword in current_model.lower() for keyword in ["qwen", "scout"]))
+        
+        # Set higher default for thinking models
+        intelligent_default = 4000 if is_thinking_model_selected else 1500
+        
+        # Initialize with intelligent default if not already set
+        if "max_completion_tokens" not in st.session_state:
+            st.session_state.max_completion_tokens = intelligent_default
+        
         st.session_state.max_completion_tokens = st.slider(
             "Max Completion Tokens", 
             100, 10000, 
-            st.session_state.get("max_completion_tokens", 500), 
-            key="max_completion_tokens_slider"
+            st.session_state.get("max_completion_tokens", intelligent_default), 
+            key="max_completion_tokens_slider",
+            help=f"💡 {'🧠 Thinking models need more tokens!' if is_thinking_model_selected else 'Standard models work well with fewer tokens'}"
         )
         # Configurable Max Message Limit (Point 3)
         st.session_state.max_history = st.slider(
@@ -201,6 +284,43 @@ with st.sidebar:
             key="temperature_slider",
             help="Lower values (e.g., 0.2) are more deterministic; higher values (e.g., 0.8) are more random."
         )
+        
+        # Thinking Settings Panel
+        st.markdown("---")
+        st.subheader("🧠 Thinking Settings")
+        
+        # Only show thinking settings if a thinking model is selected
+        current_model = st.session_state.get("model", "")
+        is_current_thinking = (current_model in GEMINI_MODEL_OPTIONS and ("2.5" in current_model or "thinking" in current_model.lower())) or \
+                             (current_model in CEREBRAS_MODEL_OPTIONS and any(keyword in current_model.lower() for keyword in ["qwen", "scout"]))
+        
+        if is_current_thinking:
+            # Thinking display preferences
+            st.session_state.thinking_auto_expand = st.checkbox(
+                "Auto-expand thinking process",
+                value=st.session_state.get("thinking_auto_expand", False),
+                help="Automatically expand the thinking section for new responses"
+            )
+            
+            st.session_state.thinking_show_stats = st.checkbox(
+                "Show thinking statistics",
+                value=st.session_state.get("thinking_show_stats", True),
+                help="Display thinking chunk count and processing info"
+            )
+            
+            # Thinking verbosity for Gemini models
+            if current_model in GEMINI_MODEL_OPTIONS:
+                st.session_state.thinking_verbosity = st.selectbox(
+                    "Thinking Detail Level",
+                    options=["Concise", "Normal", "Detailed"],
+                    index=1,  # Default to Normal
+                    key="thinking_verbosity_selector",
+                    help="Control how much thinking detail the model should show"
+                )
+            
+            st.info("💡 Thinking models will show their reasoning process in an expandable section below responses.")
+        else:
+            st.info("🔄 Select a thinking-capable model (🧠) to access thinking settings.")
 
     # System Prompt Management
     st.subheader("📝 System Prompts")
@@ -491,7 +611,11 @@ if prompt := st.chat_input("Send a message..."):
                     thought_content = None # Initialize thought_content
 
                     # --- Client Dispatch Logic ---
-                    if selected_model_name in CEREBRAS_MODEL_OPTIONS:
+                    # Better model detection logic
+                    is_cerebras_model = selected_model_name in CEREBRAS_MODEL_OPTIONS
+                    is_gemini_model = selected_model_name in GEMINI_MODEL_OPTIONS or "gemini" in selected_model_name.lower()
+                    
+                    if is_cerebras_model:
                         if client_connections["cerebras"]:
                             st.toast(f"Calling Cerebras model: {selected_model_name}...", icon="🧠") # Debug Toast
                             # Cerebras specific params might need adjustment if different from Gemini
@@ -510,53 +634,38 @@ if prompt := st.chat_input("Send a message..."):
                         else:
                             st.error(f"Cerebras client not available for model {selected_model_name}. Check API key.")
                             st.stop()
-                    elif selected_model_name in GEMINI_MODEL_OPTIONS:
+                    elif is_gemini_model:
                         if gemini_api_configured: # Check if Gemini API was set up
                             st.toast(f"Calling Gemini model: {selected_model_name}...", icon="✨") # Debug Toast
-                            from gemini_client import initialize_model # import only when needed
+                            from gemini_client import generate_content_with_thinking, is_thinking_model # import thinking functions
                             
-                            # system_instruction_text will be extracted from messages_for_api
-                            system_instruction_text_for_gemini = None
-                            temp_messages_for_gemini = []
+                            # Extract temperature and max_tokens from api_params
+                            temperature = api_params.get("temperature", 0.7)
+                            max_tokens = api_params.get("max_completion_tokens", 8192)
                             
-                            # Convert messages to Gemini format [{role: "user"/"model", parts: [text]}]
-                            # And extract system prompt
-                            gemini_formatted_messages = []
-                            for msg_idx, msg in enumerate(messages_for_api):
-                                role = "model" if msg["role"] == "assistant" else msg["role"]
-                                if role == "system" and msg_idx == 0: # System prompt should be first
-                                    system_instruction_text_for_gemini = msg["content"]
-                                    # Do not add system prompt to gemini_formatted_messages, it's passed to initialize_model
-                                else:
-                                    gemini_formatted_messages.append({"role": role, "parts": [msg["content"]]})
-                            
-                            gemini_model_instance = initialize_model(
-                                selected_model_name, 
-                                st, 
-                                system_instruction=system_instruction_text_for_gemini
+                            # Call the new thinking-enabled function
+                            raw_response, thinking_content = generate_content_with_thinking(
+                                model_name=selected_model_name,
+                                messages=messages_for_api,
+                                temperature=temperature,
+                                max_tokens=max_tokens
                             )
-
-                            if gemini_model_instance:
-                                gemini_generation_config = {}
-                                if "max_completion_tokens" in api_params:
-                                     gemini_generation_config["max_output_tokens"] = api_params["max_completion_tokens"]
-                                if "temperature" in api_params:
-                                     gemini_generation_config["temperature"] = api_params["temperature"]
-
-                                response = gemini_model_instance.generate_content(
-                                    contents=gemini_formatted_messages, # History without system prompt
-                                    generation_config=genai.types.GenerationConfig(**gemini_generation_config) if gemini_generation_config else None,
-                                )
-                                raw_response = response.text
-                                st.toast(f"Response received from Gemini: {selected_model_name}", icon="✅") # Debug Toast
-                            else:
-                                st.error(f"Failed to initialize Gemini model {selected_model_name} with system prompt '{system_instruction_text_for_gemini}'.")
+                            
+                            # Check if there was an error
+                            if raw_response.startswith("Error:"):
+                                st.error(f"Gemini API error: {raw_response}")
                                 st.stop()
+                            
+                            # Set thought_content for thinking models
+                            if thinking_content:
+                                thought_content = thinking_content
+                            
+                            st.toast(f"Response received from Gemini: {selected_model_name}", icon="✅") # Debug Toast
                         else:
                             st.error("Gemini API not configured. Please set GEMINI_API_KEY.")
                             st.stop()
                     else:
-                        st.error(f"Unknown model type for {selected_model_name}. Cannot proceed.")
+                        st.error(f"Unknown model type for {selected_model_name}. This model is not recognized as either Cerebras or Gemini.")
                         st.stop()
                     # --- End Client Dispatch ---
 
@@ -589,15 +698,58 @@ if prompt := st.chat_input("Send a message..."):
                     # --- End of new logic ---
 
                     if thought_content:
-                        with st.expander("🧠 Thought Process"):
-                            st.caption(thought_content)
-                    
+                        # Use user settings for thinking display
+                        auto_expand = st.session_state.get("thinking_auto_expand", False)
+                        show_stats = st.session_state.get("thinking_show_stats", True)
+                        
+                        # Count thinking chunks/words for statistics
+                        thinking_stats = ""
+                        if show_stats:
+                            word_count = len(thought_content.split())
+                            char_count = len(thought_content)
+                            thinking_stats = f" ({word_count} words, {char_count} characters)"
+                        
+                        with st.expander(f"🧠 Thought Process{thinking_stats}", expanded=auto_expand):
+                            # Add thinking content with better formatting
+                            st.markdown("**Model's reasoning process:**")
+                            
+                            # Process thinking content for better formatting
+                            formatted_thinking = thought_content
+                            
+                            # Add proper line breaks for common patterns
+                            formatted_thinking = formatted_thinking.replace('. ', '.\n\n')  # Paragraph breaks
+                            formatted_thinking = formatted_thinking.replace('? ', '?\n\n')  # Question breaks
+                            formatted_thinking = formatted_thinking.replace(': ', ':\n\n')  # Colon breaks
+                            
+                            # Handle numbered lists better
+                            import re
+                            formatted_thinking = re.sub(r'(\d+\.)\s*', r'\n\n**\1** ', formatted_thinking)
+                            
+                            # Handle bullet points
+                            formatted_thinking = re.sub(r'([•\-\*])\s*', r'\n\n\1 ', formatted_thinking)
+                            
+                            # Clean up excessive line breaks
+                            formatted_thinking = re.sub(r'\n{3,}', '\n\n', formatted_thinking)
+                            formatted_thinking = formatted_thinking.strip()
+                            
+                            # Display as markdown in a container with custom styling
+                            st.markdown(
+                                f"""
+                                <div class="thinking-content">
+                                {formatted_thinking.replace(chr(10), '<br>')}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            
                     st.markdown(content_with_anchor_and_link, unsafe_allow_html=True)
                     # Save the processed content (with HTML) to history
                     st.session_state.messages.append({"role": "assistant", "content": content_with_anchor_and_link})
 
                 except Exception as e:
-                    st.error(f"An error occurred with the Cerebras API: {e}")
+                    # Determine which API we were using for better error context
+                    api_type = "Gemini" if is_gemini_model else "Cerebras" if is_cerebras_model else "AI"
+                    st.error(f"An error occurred with the {api_type} API: {e}")
                     st.session_state.messages.append({"role": "assistant", "content": f"⚠️ Error: {e}"})
 
 # --- Session Expire Handling (Hardcoded MAX_MESSAGES is now dynamic) ---
@@ -703,6 +855,85 @@ st.markdown(
     /* Fix layout spacing */
     .stExpander [data-testid="stExpanderDetails"] {
         padding: 10px;
+    }
+    
+    /* Enhanced thinking section styling */
+    .thinking-process {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-left: 4px solid #007bff;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+    }
+    
+    html[data-theme="dark"] .thinking-process {
+        background: linear-gradient(135deg, #2c2c2c 0%, #3c3c3c 100%);
+        border-left: 4px solid #4dabf7;
+    }
+    
+    /* Model capability indicators */
+    .model-capability {
+        display: inline-block;
+        padding: 3px 8px;
+        margin: 2px;
+        border-radius: 12px;
+        font-size: 0.75em;
+        font-weight: 500;
+    }
+    
+    .thinking-capable {
+        background-color: #e3f2fd;
+        color: #1976d2;
+        border: 1px solid #90caf9;
+    }
+    
+    .fast-inference {
+        background-color: #fff3e0;
+        color: #f57c00;
+        border: 1px solid #ffb74d;
+    }
+    
+    html[data-theme="dark"] .thinking-capable {
+        background-color: #1a2332;
+        color: #90caf9;
+        border: 1px solid #1976d2;
+    }
+    
+    html[data-theme="dark"] .fast-inference {
+        background-color: #2d1b0d;
+        color: #ffb74d;
+        border: 1px solid #f57c00;
+    }
+    
+    /* Thinking statistics styling */
+    .thinking-stats {
+        font-size: 0.85em;
+        color: #666;
+        font-style: italic;
+    }
+    
+    html[data-theme="dark"] .thinking-stats {
+        color: #999;
+    }
+    
+    /* Enhanced thinking content display */
+    .thinking-content {
+        background-color: #f8f9fa;
+        border-left: 4px solid #007bff;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        max-height: 400px;
+        overflow-y: auto;
+        color: #333;
+    }
+    
+    html[data-theme="dark"] .thinking-content {
+        background-color: #2c2c2c;
+        border-left: 4px solid #4dabf7;
+        color: #e0e0e0;
     }
 
     </style>
